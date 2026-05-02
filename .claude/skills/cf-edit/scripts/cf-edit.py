@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# cf-edit v1.3 — Edit 1C configuration root (Configuration.xml)
+# cf-edit v1.4 — Edit 1C configuration root (Configuration.xml)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -162,7 +162,7 @@ def main():
     parser = argparse.ArgumentParser(description="Edit 1C configuration root (Configuration.xml)", allow_abbrev=False)
     parser.add_argument("-ConfigPath", "-Path", required=True)
     parser.add_argument("-DefinitionFile", default=None)
-    parser.add_argument("-Operation", default=None, choices=["modify-property", "add-childObject", "remove-childObject", "add-defaultRole", "remove-defaultRole", "set-defaultRoles", "set-panels"])
+    parser.add_argument("-Operation", default=None, choices=["modify-property", "add-childObject", "remove-childObject", "add-defaultRole", "remove-defaultRole", "set-defaultRoles", "set-panels", "set-home-page"])
     parser.add_argument("-Value", default=None)
     parser.add_argument("-NoValidate", action="store_true")
     args = parser.parse_args()
@@ -593,6 +593,170 @@ def main():
         modify_count += 1
         info(f"Wrote panel layout: {cai_path}")
 
+    # --- set-home-page (writes Ext/HomePageWorkArea.xml from scratch) ---
+    RU_TYPE_MAP = {
+        "справочник": "Catalog", "документ": "Document", "перечисление": "Enum",
+        "отчёт": "Report", "отчет": "Report", "обработка": "DataProcessor",
+        "общаяформа": "CommonForm", "журналдокументов": "DocumentJournal",
+        "планвидовхарактеристик": "ChartOfCharacteristicTypes",
+        "плансчетов": "ChartOfAccounts",
+        "планвидоврасчета": "ChartOfCalculationTypes",
+        "планвидоврасчёта": "ChartOfCalculationTypes",
+        "регистрсведений": "InformationRegister",
+        "регистрнакопления": "AccumulationRegister",
+        "регистрбухгалтерии": "AccountingRegister",
+        "регистррасчета": "CalculationRegister",
+        "регистррасчёта": "CalculationRegister",
+        "бизнеспроцесс": "BusinessProcess",
+        "задача": "Task", "планобмена": "ExchangePlan",
+        "хранилищенастроек": "SettingsStorage",
+    }
+    DIR_TO_TYPE = {v.lower(): k for k, v in TYPE_TO_DIR.items()}
+    UUID_RE = __import__("re").compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+    def normalize_form_ref(s):
+        s = (s or "").strip()
+        if not s:
+            return s
+        if UUID_RE.match(s):
+            return s
+        if "/" in s or "\\" in s:
+            parts = [p for p in s.replace("\\", "/").split("/") if p and p.lower() != "ext"]
+            if parts and parts[-1].lower() == "form.xml":
+                parts = parts[:-1]
+            if len(parts) >= 2:
+                type_dir = parts[0]
+                type_singular = DIR_TO_TYPE.get(type_dir.lower())
+                if type_singular:
+                    if type_singular == "CommonForm" and len(parts) >= 2:
+                        return f"CommonForm.{parts[1]}"
+                    if len(parts) >= 4 and parts[2].lower() == "forms":
+                        return f"{type_singular}.{parts[1]}.Form.{parts[3]}"
+            return s
+        segs = s.split(".")
+        if segs:
+            head = segs[0].lower()
+            if head in RU_TYPE_MAP:
+                segs[0] = RU_TYPE_MAP[head]
+            for i in range(1, len(segs)):
+                if segs[i] == "Форма":
+                    segs[i] = "Form"
+            if len(segs) == 3 and segs[0] in TYPE_ORDER and segs[0] != "CommonForm":
+                segs = [segs[0], segs[1], "Form", segs[2]]
+        return ".".join(segs)
+
+    def get_field(obj, keys):
+        for k in keys:
+            if isinstance(obj, dict) and k in obj:
+                return obj[k]
+        return None
+
+    def build_home_page_item_xml(entry, indent):
+        if isinstance(entry, str):
+            form_ref = normalize_form_ref(entry)
+            height = 10
+            common = True
+            roles = None
+        elif isinstance(entry, dict):
+            form_raw = get_field(entry, ["form", "Form"])
+            if not form_raw:
+                print(f"Home page item: 'form' is required, got: {entry!r}", file=sys.stderr)
+                sys.exit(1)
+            form_ref = normalize_form_ref(str(form_raw))
+            h = get_field(entry, ["height", "Height"])
+            height = int(h) if h is not None else 10
+            vis = get_field(entry, ["visibility", "Visibility"])
+            common = bool(vis) if vis is not None else True
+            roles = get_field(entry, ["roles"])
+        else:
+            print(f"Home page item must be string or object, got: {entry!r}", file=sys.stderr)
+            sys.exit(1)
+
+        vis_parts = [f"{indent}\t\t<xr:Common>{str(common).lower()}</xr:Common>"]
+        if roles and isinstance(roles, dict):
+            for rname, rval in roles.items():
+                if not rname.startswith("Role.") and not UUID_RE.match(rname):
+                    rname = f"Role.{rname}"
+                rval_s = str(bool(rval)).lower()
+                vis_parts.append(f'{indent}\t\t<xr:Value name="{html_escape(rname, quote=True)}">{rval_s}</xr:Value>')
+        vis_block = "\r\n".join(vis_parts)
+        esc_form = html_escape(form_ref, quote=True)
+        return (
+            f"{indent}<Item>\r\n"
+            f"{indent}\t<Form>{esc_form}</Form>\r\n"
+            f"{indent}\t<Height>{height}</Height>\r\n"
+            f"{indent}\t<Visibility>\r\n"
+            f"{vis_block}\r\n"
+            f"{indent}\t</Visibility>\r\n"
+            f"{indent}</Item>"
+        )
+
+    def do_set_home_page(value):
+        nonlocal modify_count
+        layout = value
+        if isinstance(layout, str):
+            try:
+                layout = json.loads(layout)
+            except json.JSONDecodeError:
+                print("set-home-page value must be valid JSON object", file=sys.stderr)
+                sys.exit(1)
+        if not isinstance(layout, dict) or not layout:
+            print("set-home-page value must be non-empty object", file=sys.stderr)
+            sys.exit(1)
+
+        allowed_templates = ("OneColumn", "TwoColumnsEqualWidth", "TwoColumnsVariableWidth")
+        tmpl = get_field(layout, ["template", "WorkingAreaTemplate"]) or "TwoColumnsEqualWidth"
+        if tmpl not in allowed_templates:
+            print(f"Unknown template '{tmpl}'. Allowed: {', '.join(allowed_templates)}", file=sys.stderr)
+            sys.exit(1)
+
+        left_items = get_field(layout, ["left", "LeftColumn"])
+        right_items = get_field(layout, ["right", "RightColumn"])
+
+        known = {"template", "WorkingAreaTemplate", "left", "LeftColumn", "right", "RightColumn"}
+        for k in layout.keys():
+            if k not in known:
+                print(f"Unknown key '{k}'. Allowed: template, left, right", file=sys.stderr)
+                sys.exit(1)
+
+        if tmpl == "OneColumn" and right_items:
+            print("Template 'OneColumn' cannot have items in 'right' column", file=sys.stderr)
+            sys.exit(1)
+
+        def build_column(tag, items):
+            if not items:
+                return f"\t<{tag}/>"
+            if not isinstance(items, list):
+                items = [items]
+            if not items:
+                return f"\t<{tag}/>"
+            blocks = [build_home_page_item_xml(it, "\t\t") for it in items]
+            body = "\r\n".join(blocks)
+            return f"\t<{tag}>\r\n{body}\r\n\t</{tag}>"
+
+        left_xml = build_column("LeftColumn", left_items)
+        right_xml = build_column("RightColumn", right_items)
+
+        hp_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\r\n'
+            '<HomePageWorkArea xmlns="http://v8.1c.ru/8.3/xcf/extrnprops" '
+            'xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" '
+            'xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.17">\r\n'
+            f'\t<WorkingAreaTemplate>{tmpl}</WorkingAreaTemplate>\r\n'
+            f'{left_xml}\r\n'
+            f'{right_xml}\r\n'
+            '</HomePageWorkArea>'
+        )
+
+        ext_dir = os.path.join(config_dir, "Ext")
+        os.makedirs(ext_dir, exist_ok=True)
+        hp_path = os.path.join(ext_dir, "HomePageWorkArea.xml")
+        with open(hp_path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(hp_xml)
+        modify_count += 1
+        info(f"Wrote home page layout: {hp_path}")
+
     # --- Execute operations ---
     operations = []
     if args.DefinitionFile:
@@ -626,6 +790,8 @@ def main():
             do_set_default_roles(op_value if isinstance(op_value, str) else str(op_value))
         elif op_name == "set-panels":
             do_set_panels(op_value)
+        elif op_name == "set-home-page":
+            do_set_home_page(op_value)
         else:
             print(f"Unknown operation: {op_name}", file=sys.stderr)
             sys.exit(1)

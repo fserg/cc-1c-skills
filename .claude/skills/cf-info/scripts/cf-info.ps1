@@ -1,9 +1,12 @@
-﻿# cf-info v1.1 — Compact summary of 1C configuration root
+﻿# cf-info v1.2 — Compact summary of 1C configuration root
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory=$true)][Alias('Path')][string]$ConfigPath,
 	[ValidateSet("overview","brief","full")]
 	[string]$Mode = "overview",
+	[Alias('Name')]
+	[ValidateSet("home-page")]
+	[string]$Section,
 	[int]$Limit = 150,
 	[int]$Offset = 0,
 	[string]$OutFile
@@ -171,6 +174,62 @@ function Format-LayoutSlots($slots) {
 
 $script:panelLayout = Get-PanelsLayout
 
+# --- Read home page layout (Ext/HomePageWorkArea.xml) ---
+function Get-HomePageLayout {
+	$configDir = [System.IO.Path]::GetDirectoryName($ConfigPath)
+	$hpPath = Join-Path (Join-Path $configDir "Ext") "HomePageWorkArea.xml"
+	if (-not (Test-Path $hpPath)) { return $null }
+	try { [xml]$hpDoc = Get-Content -Path $hpPath -Encoding UTF8 } catch { return $null }
+	if (-not $hpDoc.DocumentElement) { return $null }
+	$hpNs = New-Object System.Xml.XmlNamespaceManager($hpDoc.NameTable)
+	$hpNs.AddNamespace("hp", "http://v8.1c.ru/8.3/xcf/extrnprops")
+	$hpNs.AddNamespace("xr", "http://v8.1c.ru/8.3/xcf/readable")
+	$result = [ordered]@{ template = ""; left = @(); right = @() }
+	$tmplNode = $hpDoc.DocumentElement.SelectSingleNode("hp:WorkingAreaTemplate", $hpNs)
+	if ($tmplNode) { $result.template = $tmplNode.InnerText.Trim() }
+	foreach ($colName in @("LeftColumn","RightColumn")) {
+		$colNode = $hpDoc.DocumentElement.SelectSingleNode("hp:$colName", $hpNs)
+		if (-not $colNode) { continue }
+		$items = @()
+		foreach ($item in $colNode.SelectNodes("hp:Item", $hpNs)) {
+			$f = $item.SelectSingleNode("hp:Form", $hpNs)
+			$h = $item.SelectSingleNode("hp:Height", $hpNs)
+			$visNode = $item.SelectSingleNode("hp:Visibility", $hpNs)
+			$common = $true
+			$roles = @()
+			if ($visNode) {
+				$cn = $visNode.SelectSingleNode("xr:Common", $hpNs)
+				if ($cn) { $common = ($cn.InnerText.Trim() -eq "true") }
+				foreach ($v in $visNode.SelectNodes("xr:Value", $hpNs)) {
+					$roles += @{ name = $v.GetAttribute("name"); value = ($v.InnerText.Trim() -eq "true") }
+				}
+			}
+			$items += [ordered]@{
+				form = if ($f) { $f.InnerText.Trim() } else { "" }
+				height = if ($h) { [int]$h.InnerText.Trim() } else { 10 }
+				common = $common
+				roles = $roles
+			}
+		}
+		if ($colName -eq "LeftColumn") { $result.left = $items } else { $result.right = $items }
+	}
+	return $result
+}
+
+$script:homePage = Get-HomePageLayout
+
+function Format-HomePageItem($it, [bool]$detailed) {
+	$badges = @()
+	$badges += "h=$($it.height)"
+	if (-not $it.common) { $badges += "скрыта" }
+	if ($it.roles.Count -gt 0) {
+		if ($detailed) { $badges += "роли: $($it.roles.Count)" }
+		else { $badges += "+$($it.roles.Count) ролей" }
+	}
+	$tail = if ($badges.Count -gt 0) { " (" + ($badges -join ", ") + ")" } else { "" }
+	return "    $($it.form)$tail"
+}
+
 # --- Count objects in ChildObjects ---
 $objectCounts = [ordered]@{}
 $totalObjects = 0
@@ -207,7 +266,7 @@ $cfgDbSpaces = Get-PropText "DatabaseTablespacesUseMode"
 $cfgWindowMode = Get-PropText "MainClientApplicationWindowMode"
 
 # --- BRIEF mode ---
-if ($Mode -eq "brief") {
+if ($Mode -eq "brief" -and -not $Section) {
 	$synPart = if ($cfgSynonym) { " $dash `"$cfgSynonym`"" } else { "" }
 	$verPart = if ($cfgVersion) { " v$cfgVersion" } else { "" }
 	$compatPart = if ($cfgCompat) { " | $cfgCompat" } else { "" }
@@ -215,7 +274,7 @@ if ($Mode -eq "brief") {
 }
 
 # --- OVERVIEW mode ---
-if ($Mode -eq "overview") {
+if ($Mode -eq "overview" -and -not $Section) {
 	$synPart = if ($cfgSynonym) { " $dash `"$cfgSynonym`"" } else { "" }
 	$verPart = if ($cfgVersion) { " v$cfgVersion" } else { "" }
 	Out "=== Конфигурация: ${cfgName}${synPart}${verPart} ==="
@@ -251,6 +310,16 @@ if ($Mode -eq "overview") {
 		}
 	}
 
+	# Home page layout (brief summary)
+	if ($script:homePage) {
+		$ln = $script:homePage.left.Count
+		$rn = $script:homePage.right.Count
+		Out "--- Начальная страница ---"
+		Out "  Шаблон: $($script:homePage.template)"
+		Out "  LeftColumn: $ln, RightColumn: $rn  (детали: -Section home-page)"
+		Out ""
+	}
+
 	# Object counts table
 	Out "--- Состав ($totalObjects объектов) ---"
 	Out ""
@@ -273,8 +342,34 @@ if ($Mode -eq "overview") {
 	}
 }
 
+# --- Drill-down: -Section home-page ---
+if ($Section -eq "home-page") {
+	if (-not $script:homePage) {
+		Out "Файл Ext/HomePageWorkArea.xml не найден"
+	} else {
+		Out "=== Начальная страница: $cfgName ==="
+		Out ""
+		Out "Шаблон: $($script:homePage.template)"
+		Out ""
+		foreach ($side in @(@("LeftColumn","left"), @("RightColumn","right"))) {
+			$items = $script:homePage[$side[1]]
+			$lbl = $side[0]
+			if ($items.Count -eq 0) { Out "${lbl}: —"; Out ""; continue }
+			Out "${lbl} ($($items.Count)):"
+			foreach ($it in $items) {
+				Out (Format-HomePageItem $it $true)
+				foreach ($r in $it.roles) {
+					$rval = if ($r.value) { "true" } else { "false" }
+					Out "      $($r.name): $rval"
+				}
+			}
+			Out ""
+		}
+	}
+}
+
 # --- FULL mode ---
-if ($Mode -eq "full") {
+if ($Mode -eq "full" -and -not $Section) {
 	$synPart = if ($cfgSynonym) { " $dash `"$cfgSynonym`"" } else { "" }
 	$verPart = if ($cfgVersion) { " v$cfgVersion" } else { "" }
 	Out "=== Конфигурация: ${cfgName}${synPart}${verPart} ==="
@@ -359,6 +454,16 @@ if ($Mode -eq "full") {
 		if ($script:panelLayout.declared.Count -gt 0) {
 			Out "  объявлено: $($script:panelLayout.declared -join ', ')"
 		}
+		Out ""
+	}
+
+	# --- Section: Home page (brief summary) ---
+	if ($script:homePage) {
+		$ln = $script:homePage.left.Count
+		$rn = $script:homePage.right.Count
+		Out "--- Начальная страница ---"
+		Out "  Шаблон: $($script:homePage.template)"
+		Out "  LeftColumn: $ln, RightColumn: $rn  (детали: -Section home-page)"
 		Out ""
 	}
 

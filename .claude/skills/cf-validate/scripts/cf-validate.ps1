@@ -1,4 +1,4 @@
-﻿# cf-validate v1.2 — Validate 1C configuration root structure
+﻿# cf-validate v1.3 — Validate 1C configuration root structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory)]
@@ -534,6 +534,72 @@ if ($childObjNode) {
 			Report-Warn "8. Missing directory: $md"
 		}
 	}
+}
+
+# --- Check 9: Form references (HomePageWorkArea + Properties) ---
+function Test-FormRef([string]$ref) {
+	if (-not $ref) { return $true }
+	# UUID — cannot verify without scanning all forms; skip
+	if ($ref -match $guidPattern) { return $true }
+	$parts = $ref.Split(".")
+	if ($parts.Count -eq 2 -and $parts[0] -eq "CommonForm") {
+		$p = Join-Path (Join-Path (Join-Path $configDir "CommonForms") $parts[1]) "Form.xml"
+		$pExt = Join-Path (Join-Path (Join-Path (Join-Path $configDir "CommonForms") $parts[1]) "Ext") "Form.xml"
+		return (Test-Path $p) -or (Test-Path $pExt)
+	}
+	if ($parts.Count -eq 4 -and $parts[2] -eq "Form" -and $childTypeDirMap.ContainsKey($parts[0])) {
+		$dir = $childTypeDirMap[$parts[0]]
+		$p = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $configDir $dir) $parts[1]) "Forms") $parts[3]) "Form.xml"
+		$pExt = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $configDir $dir) $parts[1]) "Forms") $parts[3]) "Ext") "Form.xml"
+		return (Test-Path $p) -or (Test-Path $pExt)
+	}
+	return $false
+}
+
+$formRefsChecked = 0
+$formRefErrors = @()
+
+# HomePageWorkArea
+$hpPath = Join-Path (Join-Path $configDir "Ext") "HomePageWorkArea.xml"
+if (Test-Path $hpPath) {
+	try {
+		[xml]$hpDoc = Get-Content -Path $hpPath -Encoding UTF8
+		$hpNs = New-Object System.Xml.XmlNamespaceManager($hpDoc.NameTable)
+		$hpNs.AddNamespace("hp", "http://v8.1c.ru/8.3/xcf/extrnprops")
+		foreach ($f in $hpDoc.DocumentElement.SelectNodes("//hp:Item/hp:Form", $hpNs)) {
+			$ref = $f.InnerText.Trim()
+			if (-not $ref) { continue }
+			$formRefsChecked++
+			if (-not (Test-FormRef $ref)) {
+				$formRefErrors += "HomePageWorkArea.Form '$ref' — file not found"
+			}
+		}
+	} catch {
+		$formRefErrors += "HomePageWorkArea.xml: parse error — $($_.Exception.Message)"
+	}
+}
+
+# Properties: DefaultXxxForm refs
+if ($propsNode) {
+	$formProps = @("DefaultReportForm","DefaultReportVariantForm","DefaultReportSettingsForm","DefaultDynamicListSettingsForm","DefaultSearchForm","DefaultDataHistoryChangeHistoryForm","DefaultDataHistoryVersionDataForm","DefaultDataHistoryVersionDifferencesForm","DefaultCollaborationSystemUsersChoiceForm","DefaultConstantsForm")
+	foreach ($pn in $formProps) {
+		$node = $propsNode.SelectSingleNode("md:$pn", $ns)
+		if ($node -and $node.InnerText.Trim()) {
+			$ref = $node.InnerText.Trim()
+			$formRefsChecked++
+			if (-not (Test-FormRef $ref)) {
+				$formRefErrors += "Properties.$pn '$ref' — form not found"
+			}
+		}
+	}
+}
+
+if ($formRefsChecked -eq 0) {
+	Report-OK "9. Form references: none to check"
+} elseif ($formRefErrors.Count -eq 0) {
+	Report-OK "9. Form references: $formRefsChecked verified"
+} else {
+	foreach ($err in $formRefErrors) { Report-Error "9. $err" }
 }
 
 # --- Final output ---

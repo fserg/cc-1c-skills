@@ -74,6 +74,7 @@ powershell.exe -NoProfile -File .claude/skills/form-compile/scripts/form-compile
 | `"picField"` | PictureField      | имя                                               |
 | `"calendar"` | CalendarField     | имя                                               |
 | `"cmdBar"`   | CommandBar        | имя                                               |
+| `"autoCmdBar"` | AutoCommandBar формы | имя — наполняет главную АКП формы (id=-1), не попадает в `<ChildItems>` |
 | `"popup"`    | Popup             | имя                                               |
 
 ### Общие свойства (все типы элементов)
@@ -202,10 +203,29 @@ powershell.exe -NoProfile -File .claude/skills/form-compile/scripts/form-compile
 
 ### Командная панель (cmdBar)
 
+Дополнительная пользовательская панель команд, размещается как обычный элемент в layout формы.
+
 | Ключ | Описание |
 |------|----------|
 | `autofill: true` | Автозаполнение стандартными командами |
 | `children: [...]` | Кнопки панели |
+
+### Главная автокомандная панель формы (autoCmdBar)
+
+Наполняет встроенную AutoCommandBar формы (id=-1) кастомными кнопками. Указывать только если нужно добавить свои кнопки на главную панель или явно управлять автозаполнением.
+
+| Ключ | Описание |
+|------|----------|
+| `autofill: true/false` | Автозаполнение стандартными командами |
+| `horizontalAlign` | `"Left"` / `"Center"` / `"Right"` |
+| `children: [...]` | Кнопки/popup |
+
+```json
+{ "autoCmdBar": "ФормаКоманднаяПанель", "autofill": true, "children": [
+   { "button": "ИзменитьВыделенные", "command": "ИзменитьВыделенные",
+     "locationInCommandBar": "InAdditionalSubmenu" }
+]}
+```
 
 ### Выпадающее меню (popup)
 
@@ -239,6 +259,7 @@ powershell.exe -NoProfile -File .claude/skills/form-compile/scripts/form-compile
 ```
 
 - `savedData: true` — сохраняемые данные
+- `main: true` — главный реквизит формы (например, основной `*Object.*`, `DynamicList`, `*RecordSet.*`)
 
 ### Команды (commands)
 

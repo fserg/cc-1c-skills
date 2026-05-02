@@ -14,7 +14,7 @@
       "script": "form-compile/scripts/form-compile",
       "input": {
         "title": "Простая форма",
-        "attributes": [{ "name": "Объект", "type": "ExternalDataProcessorObject.Простая", "main": true }]
+        "attributes": [{ "name": "Объект", "type": "DataProcessorObject.Простая", "main": true }]
       },
       "args": { "-JsonPath": "{inputFile}", "-OutputPath": "{workDir}/DataProcessors/Простая/Forms/Форма/Ext/Form.xml" }
     }

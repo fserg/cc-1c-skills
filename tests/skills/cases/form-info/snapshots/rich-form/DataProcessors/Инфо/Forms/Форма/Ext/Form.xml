@@ -6,10 +6,7 @@
 			<v8:content>Подробная форма</v8:content>
 		</v8:item>
 	</Title>
-	<AutoCommandBar name="ФормаКоманднаяПанель" id="-1">
-		<HorizontalAlign>Right</HorizontalAlign>
-		<Autofill>false</Autofill>
-	</AutoCommandBar>
+	<AutoCommandBar name="ФормаКоманднаяПанель" id="-1"/>
 	<Events>
 		<Event name="OnCreateAtServer">ПриСозданииНаСервере</Event>
 	</Events>
@@ -67,7 +64,7 @@
 	<Attributes>
 		<Attribute name="Объект" id="23">
 			<Type>
-				<v8:Type>cfg:ExternalDataProcessorObject.Инфо</v8:Type>
+				<v8:Type>cfg:DataProcessorObject.Инфо</v8:Type>
 			</Type>
 			<MainAttribute>true</MainAttribute>
 		</Attribute>

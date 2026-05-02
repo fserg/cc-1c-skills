@@ -406,10 +406,10 @@ async function verifyCase(skillName, caseName, skillConfig, caseData, opts) {
   let configDir = (setupType === 'empty-config' || isCfInit) ? workDir : null;
 
   try {
-    // ── Step 0: Case-level fixture copy (runner.mjs compatibility) ──
-    // A case may declare `"setup": "fixture:<name>"` pointing to
-    // tests/skills/cases/<skill>/fixtures/<name> — copy its contents into workDir
-    // so the skill script finds them at the expected relative path.
+    // ── Step 0: Case-level fixture/external setup (runner.mjs compatibility) ──
+    // A case may declare:
+    //   "setup": "fixture:<name>"  — copy tests/skills/cases/<skill>/fixtures/<name>
+    //   "setup": "external:<path>" — copy contents of an external dump (e.g. ERP/БП)
     if (typeof caseData.setup === 'string' && caseData.setup.startsWith('fixture:')) {
       const fixtureName = caseData.setup.slice('fixture:'.length);
       const fixturePath = join(CASES, skillName, 'fixtures', fixtureName);
@@ -419,11 +419,23 @@ async function verifyCase(skillName, caseName, skillConfig, caseData, opts) {
       }
       cpSync(fixturePath, workDir, { recursive: true });
       log(`fixture: ${fixtureName}`, true);
+    } else if (typeof caseData.setup === 'string' && caseData.setup.startsWith('external:')) {
+      const extPath = resolve(REPO_ROOT, caseData.setup.slice('external:'.length));
+      if (!existsSync(extPath)) {
+        result.errors.push(`External setup path not found: ${extPath}`);
+        return result;
+      }
+      cpSync(extPath, workDir, { recursive: true });
+      log(`external: ${extPath}`, true);
+      configDir = workDir;
     }
 
     // ── Step 1: Setup (cf-init for empty-config, nothing for 'none') ──
+    // Skip cf-init if external/fixture setup already provided a complete config
+    const caseProvidedConfig = typeof caseData.setup === 'string' &&
+      (caseData.setup.startsWith('external:') || caseData.setup.startsWith('fixture:'));
     // Skip setup for cf-init skill — the test itself creates the config
-    if (configDir && setupType === 'empty-config' && !CONFIG_INIT_SKILLS.has(skillName)) {
+    if (configDir && setupType === 'empty-config' && !CONFIG_INIT_SKILLS.has(skillName) && !caseProvidedConfig) {
       try {
         execSkill(opts.runtime, 'cf-init/scripts/cf-init', ['-Name', 'VerifyTest', '-OutputDir', workDir]);
         log('cf-init', true);
@@ -834,7 +846,8 @@ async function verifyCase(skillName, caseName, skillConfig, caseData, opts) {
     }
 
     // ── Step 6: Auto-detect and register objects in ChildObjects ──
-    const allObjects = scanConfigObjects(configDir);
+    // Skip when config came from external/fixture setup — it's already complete.
+    const allObjects = caseProvidedConfig ? [] : scanConfigObjects(configDir);
     const cfEditOps = [];
     for (const obj of allObjects) {
       const prefix = TYPE_TO_PREFIX[obj.type];
@@ -855,6 +868,16 @@ async function verifyCase(skillName, caseName, skillConfig, caseData, opts) {
     }
 
     // ── Step 7: Platform load ──
+    // Skip platform load for external dumps (e.g. real ERP/БП configs):
+    // they're huge, version-sensitive, and the point of these test cases is
+    // to exercise the skill script against real-world XML, not to validate
+    // that an entire vendor config loads into a fresh DB.
+    if (caseProvidedConfig && caseData.setup.startsWith('external:')) {
+      result.passed = true;
+      log('platform-load', true, 'skipped (external setup)');
+      return result;
+    }
+
     const dbDir = join(workDir, 'testdb');
 
     try {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# cf-validate v1.2 — Validate 1C configuration XML structure
+# cf-validate v1.3 — Validate 1C configuration XML structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 """Validates Configuration.xml: root structure, InternalInfo, properties, ChildObjects, languages."""
 import sys, os, argparse, re
@@ -536,6 +536,60 @@ def main():
                 r.warn(f'8. Missing directory: {md}')
     else:
         pass  # no ChildObjects
+
+    # --- Check 9: Form references (HomePageWorkArea + Properties) ---
+    def test_form_ref(ref):
+        if not ref:
+            return True
+        if GUID_PATTERN.match(ref):
+            return True
+        parts = ref.split('.')
+        if len(parts) == 2 and parts[0] == 'CommonForm':
+            p = os.path.join(config_dir, 'CommonForms', parts[1], 'Form.xml')
+            p_ext = os.path.join(config_dir, 'CommonForms', parts[1], 'Ext', 'Form.xml')
+            return os.path.isfile(p) or os.path.isfile(p_ext)
+        if len(parts) == 4 and parts[2] == 'Form' and parts[0] in CHILD_TYPE_DIR_MAP:
+            d = CHILD_TYPE_DIR_MAP[parts[0]]
+            p = os.path.join(config_dir, d, parts[1], 'Forms', parts[3], 'Form.xml')
+            p_ext = os.path.join(config_dir, d, parts[1], 'Forms', parts[3], 'Ext', 'Form.xml')
+            return os.path.isfile(p) or os.path.isfile(p_ext)
+        return False
+
+    form_refs_checked = 0
+    form_ref_errors = []
+
+    hp_path = os.path.join(config_dir, 'Ext', 'HomePageWorkArea.xml')
+    if os.path.isfile(hp_path):
+        try:
+            hp_tree = etree.parse(hp_path)
+            HP_NS = 'http://v8.1c.ru/8.3/xcf/extrnprops'
+            for f in hp_tree.getroot().iter(f'{{{HP_NS}}}Form'):
+                ref = (f.text or '').strip()
+                if not ref:
+                    continue
+                form_refs_checked += 1
+                if not test_form_ref(ref):
+                    form_ref_errors.append(f"HomePageWorkArea.Form '{ref}' — file not found")
+        except Exception as e:
+            form_ref_errors.append(f'HomePageWorkArea.xml: parse error — {e}')
+
+    if props_node is not None:
+        form_props = ['DefaultReportForm','DefaultReportVariantForm','DefaultReportSettingsForm','DefaultDynamicListSettingsForm','DefaultSearchForm','DefaultDataHistoryChangeHistoryForm','DefaultDataHistoryVersionDataForm','DefaultDataHistoryVersionDifferencesForm','DefaultCollaborationSystemUsersChoiceForm','DefaultConstantsForm']
+        for pn in form_props:
+            node = props_node.find(f'md:{pn}', NS)
+            if node is not None and node.text and node.text.strip():
+                ref = node.text.strip()
+                form_refs_checked += 1
+                if not test_form_ref(ref):
+                    form_ref_errors.append(f"Properties.{pn} '{ref}' — form not found")
+
+    if form_refs_checked == 0:
+        r.ok('9. Form references: none to check')
+    elif not form_ref_errors:
+        r.ok(f'9. Form references: {form_refs_checked} verified')
+    else:
+        for err in form_ref_errors:
+            r.error(f'9. {err}')
 
     # --- Final output ---
     r.finalize(out_file)

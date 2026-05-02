@@ -1,0 +1,24 @@
+{
+  "name": "Установить начальную страницу (template + left/right + visibility/roles)",
+  "input": [
+    {
+      "operation": "set-home-page",
+      "value": {
+        "template": "TwoColumnsVariableWidth",
+        "left": [
+          "CommonForm.НачалоРаботы",
+          { "form": "CommonForm.СписокЗадач", "height": 100, "visibility": false },
+          { "form": "Справочник.Контрагенты.ФормаСписка", "height": 50 },
+          {
+            "form": "CommonForm.РабочийСтолОператора",
+            "visibility": false,
+            "roles": { "Role.Оператор": true, "ПолныеПрава": false }
+          }
+        ],
+        "right": [
+          { "form": "DataProcessor.Поиск.Form.ФормаПоиска", "height": 30 }
+        ]
+      }
+    }
+  ]
+}

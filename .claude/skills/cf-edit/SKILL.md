@@ -1,6 +1,6 @@
 ---
 name: cf-edit
-description: Точечное редактирование конфигурации 1С. Используй когда нужно изменить свойства конфигурации, добавить или удалить объект из состава, настроить роли по умолчанию, поменять раскладку панелей
+description: Точечное редактирование конфигурации 1С. Используй когда нужно изменить свойства конфигурации, добавить или удалить объект из состава, настроить роли по умолчанию, поменять раскладку панелей, настроить начальную страницу
 argument-hint: -ConfigPath <path> -Operation <op> -Value <value>
 allowed-tools:
   - Bash
@@ -38,6 +38,7 @@ powershell.exe -NoProfile -File .claude/skills/cf-edit/scripts/cf-edit.ps1 -Conf
 | `remove-defaultRole` | `Role.Name` или `Name` | Удалить роль по умолчанию |
 | `set-defaultRoles` | Имена через `;;` | Заменить список ролей по умолчанию |
 | `set-panels` | JSON-объект (см. [reference.md](reference.md)) | Перезаписать `Ext/ClientApplicationInterface.xml` (раскладка панелей) |
+| `set-home-page` | JSON-объект (см. [reference.md](reference.md)) | Перезаписать `Ext/HomePageWorkArea.xml` (начальная страница) |
 
 Допустимые значения свойств, формат DefinitionFile (JSON), каноничный порядок: [reference.md](reference.md)
 
@@ -45,15 +46,15 @@ powershell.exe -NoProfile -File .claude/skills/cf-edit/scripts/cf-edit.ps1 -Conf
 
 ```powershell
 # Изменить версию и поставщика
-... -ConfigPath test-tmp/cf -Operation modify-property -Value "Version=1.0.0.1 ;; Vendor=Фирма 1С"
+... -ConfigPath src -Operation modify-property -Value "Version=1.0.0.1 ;; Vendor=Фирма 1С"
 
 # Добавить объекты
-... -ConfigPath test-tmp/cf -Operation add-childObject -Value "Catalog.Товары ;; Document.Заказ"
+... -ConfigPath src -Operation add-childObject -Value "Catalog.Товары ;; Document.Заказ"
 
 # Удалить объект
-... -ConfigPath test-tmp/cf -Operation remove-childObject -Value "Catalog.Устаревший"
+... -ConfigPath src -Operation remove-childObject -Value "Catalog.Устаревший"
 
 # Роли по умолчанию
-... -ConfigPath test-tmp/cf -Operation add-defaultRole -Value "ПолныеПрава"
-... -ConfigPath test-tmp/cf -Operation set-defaultRoles -Value "ПолныеПрава ;; Администратор"
+... -ConfigPath src -Operation add-defaultRole -Value "ПолныеПрава"
+... -ConfigPath src -Operation set-defaultRoles -Value "ПолныеПрава ;; Администратор"
 ```

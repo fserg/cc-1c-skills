@@ -27,7 +27,7 @@
           { "button": "Выполнить", "command": "Выполнить" }
         ],
         "attributes": [
-          { "name": "Объект", "type": "ExternalDataProcessorObject.Инфо", "main": true },
+          { "name": "Объект", "type": "DataProcessorObject.Инфо", "main": true },
           { "name": "Организация", "type": "string" },
           { "name": "Период", "type": "date" },
           { "name": "Данные", "type": "ValueTable", "columns": [

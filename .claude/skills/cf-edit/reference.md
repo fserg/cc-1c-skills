@@ -35,14 +35,7 @@
 
 Формат: `Type.Name` — XML-тип и имя объекта через точку.
 
-**Важно про `add-childObject`**: операция регистрирует в `<ChildObjects>` Configuration.xml только объект, **файл которого уже существует на диске** (например `Catalogs/Товары.xml`). Если файла нет — скрипт падает с exit 1 и подсказкой. Для создания нового объекта используй профильный навык — `/meta-compile` (Catalog, Document, Enum, Report, регистры и т.д.), `/role-compile` (Role), `/subsystem-compile` (Subsystem). Они создают файл И регистрируют его в Configuration.xml за один вызов.
-
-Когда `add-childObject` всё-таки нужен: откатили Configuration.xml (или перезаписали из выгрузки БД), а файлы объектов остались — нужно восстановить ссылки в `<ChildObjects>`.
-
-При добавлении объект вставляется в каноническую позицию:
-1. Находит последний элемент того же типа → вставляет после
-2. Если тип отсутствует → находит последний элемент предшествующего типа → вставляет после
-3. Внутри одного типа — алфавитный порядок
+**Важно про `add-childObject`**: регистрирует в `<ChildObjects>` объект, **файл которого уже существует на диске**. Если файла нет — exit 1. Для создания нового объекта используй профильный навык — `/meta-compile` (Catalog, Document, Enum, Report, регистры и т.д.), `/role-compile` (Role), `/subsystem-compile` (Subsystem). Они создают файл И регистрируют его за один вызов.
 
 Batch: `"Catalog.Товары ;; Document.Заказ ;; Enum.ВидыОплат"`
 
@@ -91,12 +84,59 @@ Batch: `"Catalog.Товары ;; Document.Заказ ;; Enum.ВидыОплат"
 ]
 ```
 
-**Через `-Value`** (CLI): передавай тот же объект как JSON-строку:
-```powershell
-... -Operation set-panels -Value '{"top":["open"],"left":["sections"]}'
-```
+Через `-Value` (CLI): передай объект как JSON-строку — `... -Operation set-panels -Value '{"top":["open"]}'`.
 
-`<panelDef>` для всех 5 панелей пишется автоматически — они всегда доступны пользователю через «Вид → Настройка панелей», даже если не размещены по умолчанию.
+## set-home-page
+
+Перезаписывает `Ext/HomePageWorkArea.xml` — раскладка форм на начальной странице (рабочая область). Файл создаётся с нуля; то, что не упомянуто в `value`, отсутствует.
+
+`value` — объект:
+
+| Ключ | Канонич. (XML) | Описание |
+|------|----------------|----------|
+| `template` | `WorkingAreaTemplate` | `OneColumn` / `TwoColumnsEqualWidth` (дефолт) / `TwoColumnsVariableWidth` |
+| `left` | `LeftColumn` | массив записей форм |
+| `right` | `RightColumn` | массив записей форм (запрещён при `OneColumn`) |
+
+Принимаются и короткие и канонич. ключи (XML-имена) — оба работают.
+
+**Запись формы** — одна из:
+- Строка `"<form>"` — только имя формы, дефолты `height=10`, `visibility=true`
+- Объект `{form, height?, visibility?, roles?}`
+
+| Поле | Канонич. | Дефолт | Описание |
+|------|----------|--------|----------|
+| `form` | `Form` | — | `CommonForm.X` или `Type.Object.Form.Name` (или UUID) |
+| `height` | `Height` | `10` | Высота |
+| `visibility` | `Visibility` | `true` | Общая видимость (`<xr:Common>`) |
+| `roles` | — | — | `{"Role.Имя": true|false, ...}` — переопределения по ролям |
+
+**Семантика visibility:** `visibility` = общее правило, `roles` — точечные исключения. Скрыть для всех кроме одной роли: `{"visibility": false, "roles": {"Role.Опер": true}}`.
+
+**Пример:**
+```json
+[
+  {
+    "operation": "set-home-page",
+    "value": {
+      "template": "TwoColumnsVariableWidth",
+      "left": [
+        "CommonForm.НачалоРаботы",
+        { "form": "CommonForm.СписокЗадач", "height": 100, "visibility": false },
+        { "form": "Catalog.Контрагенты.Form.ФормаСписка", "height": 50 },
+        {
+          "form": "CommonForm.РабочийСтолОператора",
+          "visibility": false,
+          "roles": { "Role.Оператор": true, "Role.ПолныеПрава": false }
+        }
+      ],
+      "right": [
+        { "form": "DataProcessor.Поиск.Form.ФормаПоиска", "height": 30 }
+      ]
+    }
+  }
+]
+```
 
 ## DefinitionFile (JSON)
 
@@ -108,6 +148,3 @@ Batch: `"Catalog.Товары ;; Document.Заказ ;; Enum.ВидыОплат"
 ]
 ```
 
-## Авто-валидация
-
-После сохранения автоматически запускается `cf-validate` (если не указан `-NoValidate`).

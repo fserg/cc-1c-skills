@@ -1,9 +1,9 @@
-﻿# cf-edit v1.3 — Edit 1C configuration root (Configuration.xml)
+﻿# cf-edit v1.4 — Edit 1C configuration root (Configuration.xml)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory)][Alias('Path')][string]$ConfigPath,
 	[string]$DefinitionFile,
-	[ValidateSet("modify-property","add-childObject","remove-childObject","add-defaultRole","remove-defaultRole","set-defaultRoles","set-panels")]
+	[ValidateSet("modify-property","add-childObject","remove-childObject","add-defaultRole","remove-defaultRole","set-defaultRoles","set-panels","set-home-page")]
 	[string]$Operation,
 	[string]$Value,
 	[switch]$NoValidate
@@ -558,6 +558,194 @@ $bodyBlock$declarations
 	Info "Wrote panel layout: $caiPath"
 }
 
+# --- Operation: set-home-page ---
+# Russian → English type aliases for form-ref normalization
+$script:ruTypeMap = @{
+	"справочник"               = "Catalog"
+	"документ"                 = "Document"
+	"перечисление"             = "Enum"
+	"отчёт"                    = "Report"
+	"отчет"                    = "Report"
+	"обработка"                = "DataProcessor"
+	"общаяформа"               = "CommonForm"
+	"журналдокументов"         = "DocumentJournal"
+	"планвидовхарактеристик"   = "ChartOfCharacteristicTypes"
+	"плансчетов"               = "ChartOfAccounts"
+	"планвидоврасчета"         = "ChartOfCalculationTypes"
+	"планвидоврасчёта"         = "ChartOfCalculationTypes"
+	"регистрсведений"          = "InformationRegister"
+	"регистрнакопления"        = "AccumulationRegister"
+	"регистрбухгалтерии"       = "AccountingRegister"
+	"регистррасчета"           = "CalculationRegister"
+	"регистррасчёта"           = "CalculationRegister"
+	"бизнеспроцесс"            = "BusinessProcess"
+	"задача"                   = "Task"
+	"планобмена"               = "ExchangePlan"
+	"хранилищенастроек"        = "SettingsStorage"
+}
+# plural folder → singular type
+$script:dirToType = @{}
+foreach ($k in $script:typeToDir.Keys) { $script:dirToType[$script:typeToDir[$k].ToLowerInvariant()] = $k }
+
+function Normalize-FormRef([string]$s) {
+	$s = $s.Trim()
+	if (-not $s) { return $s }
+	# UUID — leave as-is
+	if ($s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { return $s }
+	# Path form?
+	if ($s.Contains("/") -or $s.Contains("\")) {
+		$parts = $s.Replace("\","/").Split("/") | Where-Object { $_ -ne "" -and $_.ToLowerInvariant() -ne "ext" }
+		# Strip trailing Form.xml
+		if ($parts.Count -gt 0 -and $parts[-1].ToLowerInvariant() -eq "form.xml") {
+			$parts = @($parts[0..($parts.Count - 2)])
+		}
+		if ($parts.Count -ge 2) {
+			$typeDir = $parts[0]
+			$typeSingular = $script:dirToType[$typeDir.ToLowerInvariant()]
+			if ($typeSingular) {
+				if ($typeSingular -eq "CommonForm" -and $parts.Count -ge 2) {
+					return "CommonForm.$($parts[1])"
+				}
+				if ($parts.Count -ge 4 -and $parts[2].ToLowerInvariant() -eq "forms") {
+					return "$typeSingular.$($parts[1]).Form.$($parts[3])"
+				}
+			}
+		}
+		return $s
+	}
+	# Dot form — translate Russian head and 'Форма' segment, auto-insert 'Form'
+	$segs = $s.Split(".")
+	if ($segs.Count -ge 1) {
+		$head = $segs[0].ToLowerInvariant()
+		if ($script:ruTypeMap.ContainsKey($head)) { $segs[0] = $script:ruTypeMap[$head] }
+		for ($i = 1; $i -lt $segs.Count; $i++) {
+			if ($segs[$i] -eq "Форма") { $segs[$i] = "Form" }
+		}
+		# Auto-insert Form: for object types with 3 segments (Type.Object.FormName)
+		if ($segs.Count -eq 3 -and $script:typeOrder -contains $segs[0] -and $segs[0] -ne "CommonForm") {
+			$segs = @($segs[0], $segs[1], "Form", $segs[2])
+		}
+	}
+	return ($segs -join ".")
+}
+
+# Accept short DSL or canonical XML keys (silently)
+function Get-FieldValue($obj, [string[]]$keys) {
+	foreach ($k in $keys) {
+		if ($obj.PSObject.Properties[$k]) { return $obj.PSObject.Properties[$k].Value }
+	}
+	return $null
+}
+
+function Build-HomePageItemXml($entry, [string]$indent) {
+	# Resolve fields
+	if ($entry -is [string]) {
+		$formRef = Normalize-FormRef $entry
+		$height = 10
+		$common = $true
+		$roles = $null
+	} else {
+		$formRaw = Get-FieldValue $entry @("form","Form")
+		if (-not $formRaw) { Write-Error "Home page item: 'form' is required, got: $($entry | ConvertTo-Json -Compress)"; exit 1 }
+		$formRef = Normalize-FormRef ([string]$formRaw)
+		$h = Get-FieldValue $entry @("height","Height")
+		$height = if ($null -ne $h) { [int]$h } else { 10 }
+		$vis = Get-FieldValue $entry @("visibility","Visibility")
+		$common = if ($null -ne $vis) { [bool]$vis } else { $true }
+		$roles = Get-FieldValue $entry @("roles")
+	}
+
+	$visParts = @()
+	$visParts += "$indent`t`t<xr:Common>$($common.ToString().ToLower())</xr:Common>"
+	if ($roles) {
+		# roles is PSCustomObject {Role.X: bool, ...}
+		foreach ($prop in $roles.PSObject.Properties) {
+			$rname = $prop.Name
+			if (-not $rname.StartsWith("Role.") -and -not ($rname -match '^[0-9a-fA-F]{8}-')) { $rname = "Role.$rname" }
+			$rval = ([bool]$prop.Value).ToString().ToLower()
+			$escName = [System.Security.SecurityElement]::Escape($rname)
+			$visParts += "$indent`t`t<xr:Value name=`"$escName`">$rval</xr:Value>"
+		}
+	}
+	$visBlock = $visParts -join "`r`n"
+	$escForm = [System.Security.SecurityElement]::Escape($formRef)
+	return @"
+$indent<Item>
+$indent`t<Form>$escForm</Form>
+$indent`t<Height>$height</Height>
+$indent`t<Visibility>
+$visBlock
+$indent`t</Visibility>
+$indent</Item>
+"@
+}
+
+function Do-SetHomePage($valArg) {
+	$layout = $valArg
+	if ($layout -is [string]) {
+		try { $layout = $layout | ConvertFrom-Json } catch {
+			Write-Error "set-home-page value must be valid JSON object"; exit 1
+		}
+	}
+	if (-not $layout) { Write-Error "set-home-page value is empty"; exit 1 }
+
+	$allowedTemplates = @("OneColumn","TwoColumnsEqualWidth","TwoColumnsVariableWidth")
+	$tmpl = Get-FieldValue $layout @("template","WorkingAreaTemplate")
+	if (-not $tmpl) { $tmpl = "TwoColumnsEqualWidth" }
+	if ($allowedTemplates -notcontains $tmpl) {
+		Write-Error "Unknown template '$tmpl'. Allowed: $($allowedTemplates -join ', ')"; exit 1
+	}
+
+	$leftItems = Get-FieldValue $layout @("left","LeftColumn")
+	$rightItems = Get-FieldValue $layout @("right","RightColumn")
+
+	# Reject unknown keys
+	$known = @("template","WorkingAreaTemplate","left","LeftColumn","right","RightColumn")
+	foreach ($prop in $layout.PSObject.Properties) {
+		if ($known -notcontains $prop.Name) {
+			Write-Error "Unknown key '$($prop.Name)'. Allowed: template, left, right"; exit 1
+		}
+	}
+
+	if ($tmpl -eq "OneColumn" -and $rightItems) {
+		Write-Error "Template 'OneColumn' cannot have items in 'right' column"; exit 1
+	}
+
+	function Build-Column([string]$tag, $items) {
+		if (-not $items) { return "`t<$tag/>" }
+		if ($items -isnot [System.Array] -and $items -isnot [System.Collections.IList]) {
+			$items = @($items)
+		}
+		if ($items.Count -eq 0) { return "`t<$tag/>" }
+		$itemBlocks = @()
+		foreach ($it in $items) {
+			$itemBlocks += Build-HomePageItemXml $it "`t`t"
+		}
+		$body = $itemBlocks -join "`r`n"
+		return "`t<$tag>`r`n$body`r`n`t</$tag>"
+	}
+
+	$leftXml = Build-Column "LeftColumn" $leftItems
+	$rightXml = Build-Column "RightColumn" $rightItems
+
+	$hpXml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<HomePageWorkArea xmlns="http://v8.1c.ru/8.3/xcf/extrnprops" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.17">
+	<WorkingAreaTemplate>$tmpl</WorkingAreaTemplate>
+$leftXml
+$rightXml
+</HomePageWorkArea>
+"@
+
+	$extDir = Join-Path $script:configDir "Ext"
+	if (-not (Test-Path $extDir)) { New-Item -ItemType Directory -Path $extDir -Force | Out-Null }
+	$hpPath = Join-Path $extDir "HomePageWorkArea.xml"
+	$utf8Bom = New-Object System.Text.UTF8Encoding($true)
+	[System.IO.File]::WriteAllText($hpPath, $hpXml, $utf8Bom)
+	$script:modifyCount++
+	Info "Wrote home page layout: $hpPath"
+}
+
 # --- Operation: set-defaultRoles ---
 function Do-SetDefaultRoles([string]$batchVal) {
 	$items = Parse-BatchValue $batchVal
@@ -634,6 +822,7 @@ foreach ($op in $operations) {
 		"remove-defaultRole" { Do-RemoveDefaultRole $opValueStr }
 		"set-defaultRoles"   { Do-SetDefaultRoles $opValueStr }
 		"set-panels"         { Do-SetPanels $opValue }
+		"set-home-page"      { Do-SetHomePage $opValue }
 		default              { Write-Error "Unknown operation: $opName"; exit 1 }
 	}
 }
